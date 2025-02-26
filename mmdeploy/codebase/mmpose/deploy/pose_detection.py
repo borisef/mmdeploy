@@ -262,6 +262,8 @@ class PoseDetection(BaseTask):
                     'img_path':
                     img_path[i]
                 }
+                print('-----------------meta_data')
+                print(meta_data)
                 data.update(meta_data)
                 data = test_pipeline(data)
                 data['inputs'] = data['inputs'].to(self.device)

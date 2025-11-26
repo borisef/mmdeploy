@@ -36,7 +36,23 @@ mmdeploy_config_onnx=/home/borisef/projects/mm/mmdeploy/configs/mmpose/pose-dete
 mmpose_config=/home/borisef/projects/mm/mmdeploy/temp/td-hm_hrnet-w32_8xb64-210e_coco-256x192.py
 checkpoint=/home/borisef/projects/mm/mmdeploy/temp/td-hm_hrnet-w32_8xb64-210e_coco-256x192-81c58e40_20220909.pth
 demo_img=/home/borisef/projects/mm/mmdeploy/demo/resources/human-pose.jpg
-work_dir=/home/borisef/temp/out_mmdeploy3
+work_dir=/home/borisef/temp/out_mmdeploy3a
 
 #OK - hrnet almost like mine
 python tools/deploy.py $mmdeploy_config_onnx $mmpose_config $checkpoint $demo_img --work-dir $work_dir --device cuda --dump-info --show
+
+
+#4) ------------------------------------------------
+mmdeploy_config_onnx=/home/borisef/projects/mm/mmdeploy/configs/mmpose/pose-detection_onnxruntime_static.py
+checkpoint=/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_dark_w32/best_coco_AP_epoch_12.pth
+mmpose_config=/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_dark_w32/td-hm_hrnet-w32_dark-8xb64-210e_coco-256x192_try.py
+demo_img=/home/borisef/projects/mm/mmdeploy/demo/resources/human-pose.jpg
+work_dir=/home/borisef/temp/out_mmdeploy4
+
+python tools/deploy.py $mmdeploy_config_onnx $mmpose_config $checkpoint $demo_img --work-dir $work_dir --device cuda --dump-info --show
+
+#OK, but images were not created
+
+#later created after:
+pip uninstall opencv-python-headless -y
+pip install opencv-python --upgrade

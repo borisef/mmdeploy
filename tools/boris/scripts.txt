@@ -45,9 +45,24 @@ python tools/deploy.py $mmdeploy_config_onnx $mmpose_config $checkpoint $demo_im
 #4) ------------------------------------------------
 mmdeploy_config_onnx=/home/borisef/projects/mm/mmdeploy/configs/mmpose/pose-detection_onnxruntime_static.py
 checkpoint=/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_dark_w32/best_coco_AP_epoch_12.pth
-mmpose_config=/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_dark_w32/td-hm_hrnet-w32_dark-8xb64-210e_coco-256x192_try.py
+mmpose_config=td-hm_hrnet-w32_dark-8xb64-210e_coco-256x192_try.py
 demo_img=/home/borisef/projects/mm/mmdeploy/demo/resources/human-pose.jpg
 work_dir=/home/borisef/temp/out_mmdeploy4
+
+#5) #with classifiers (WIP)
+mmdeploy_config_onnx=/home/borisef/projects/mm/mmdeploy/configs/mmpose/pose-detection_onnxruntime_static.py
+checkpoint=/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/epoch_18.pth
+mmpose_config=/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try1_for_onnx.py
+demo_img=/home/borisef/projects/mm/mmdeploy/demo/resources/human-pose.jpg
+work_dir=/home/borisef/temp/out_mmdeploy_with_cls_01
+
+python tools/deploy.py $mmdeploy_config_onnx $mmpose_config $checkpoint $demo_img --work-dir $work_dir --device cuda --dump-info --show
+
+
+
+
+
+
 
 python tools/deploy.py $mmdeploy_config_onnx $mmpose_config $checkpoint $demo_img --work-dir $work_dir --device cuda --dump-info --show
 

@@ -3,6 +3,7 @@
 import logging
 import os
 import os.path as osp
+import time
 from functools import partial
 
 import mmengine
@@ -23,8 +24,9 @@ from mmdeploy.utils import (IR, Backend, get_backend, get_calib_filename,
 # ── paths ──────────────────────────────────────────────────────────────
 
 NEW_EXPEREMENTAL_PARAMS = True
-USE_FP16 = True
-ORT_OPTIMIZE_ALL = True
+USE_FP16 = False #30.6 even worse
+ORT_OPTIMIZE_ALL = False # 31.4 FPS --> 31.6 FPS same
+FPS_calc = True
 
 work_dir = '/home/borisef/temp/out_mmdeploy_try'
 img = '/home/borisef/projects/mm/mmdeploy/demo/resources/human-pose.jpg'
@@ -39,7 +41,8 @@ if(NEW_EXPEREMENTAL_PARAMS):
     )
 
     model_cfg_path = (
-        '/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try1_for_onnx.py'
+       # '/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try1_for_onnx.py'
+        '/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try1.py'
     )
     # model_cfg_path = (
     #     '/home/borisef/projects/mm/mmdeploy/temp/'
@@ -166,6 +169,93 @@ def _overlay_classifier_predictions(onnx_path, img_path, model_cfg,
         cv2.imwrite(img_file, vis_img)
 
 
+def _run_pytorch_fps_benchmark(img_path, model_cfg, deploy_cfg, checkpoint,
+                               num_runs=100):
+    """Run PyTorch inference num_runs times and report FPS. Returns (fps, ms_per_frame, device_str)."""
+    from mmdeploy.apis.utils import build_task_processor
+    from mmdeploy.utils import get_input_shape
+
+    dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+    task_processor = build_task_processor(model_cfg, deploy_cfg, dev)
+    model = task_processor.build_pytorch_model(checkpoint)
+    model.eval()
+
+    input_shape = get_input_shape(deploy_cfg)
+    data, _ = task_processor.create_input(img_path, input_shape)
+
+    with torch.no_grad():
+        model.test_step(data)  # warm-up
+        if dev == 'cuda':
+            torch.cuda.synchronize()
+
+        t0 = time.perf_counter()
+        for _ in range(num_runs):
+            model.test_step(data)
+        if dev == 'cuda':
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - t0
+
+    fps = num_runs / elapsed
+    ms_per_frame = elapsed / num_runs * 1000
+    device_str = f'GPU (CUDA)' if dev == 'cuda' else 'CPU'
+    logger = get_root_logger()
+    logger.info(
+        f'[PyTorch FPS] {num_runs} runs on {device_str} in {elapsed:.3f}s → '
+        f'{fps:.1f} FPS  ({ms_per_frame:.2f} ms/frame)'
+    )
+    return fps, ms_per_frame, device_str
+
+
+def _run_fps_benchmark(onnx_path, img_path, model_cfg, deploy_cfg,
+                       num_runs=100):
+    """Run ONNX inference num_runs times and report FPS. Returns (fps, ms_per_frame, device_str)."""
+    import ctypes
+    import numpy as np
+    import onnxruntime
+
+    from mmdeploy.apis.utils import build_task_processor
+    from mmdeploy.utils import get_input_shape
+
+    # cuDNN lives inside the torch package dir; pre-load it with RTLD_GLOBAL so
+    # that ORT's CUDA provider can find it (it's not on the system LD_LIBRARY_PATH).
+    _cudnn = osp.join(osp.dirname(torch.__file__), 'lib', 'libcudnn.so.8')
+    if osp.exists(_cudnn):
+        ctypes.CDLL(_cudnn, mode=ctypes.RTLD_GLOBAL)
+
+    session = onnxruntime.InferenceSession(
+        onnx_path,
+        providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    providers = session.get_providers()
+    device_str = 'GPU (CUDA)' if 'CUDAExecutionProvider' in providers else 'CPU'
+
+    task_processor = build_task_processor(model_cfg, deploy_cfg, 'cpu')
+    input_shape = get_input_shape(deploy_cfg)
+    _, input_tensor = task_processor.create_input(img_path, input_shape)
+    if isinstance(input_tensor, (list, tuple)):
+        input_tensor = torch.stack(input_tensor)
+    input_np = input_tensor.cpu().float().numpy()
+
+    input_name = session.get_inputs()[0].name
+    if 'float16' in session.get_inputs()[0].type:
+        input_np = input_np.astype(np.float16)
+
+    session.run(None, {input_name: input_np})  # warm-up
+
+    t0 = time.perf_counter()
+    for _ in range(num_runs):
+        session.run(None, {input_name: input_np})
+    elapsed = time.perf_counter() - t0
+
+    fps = num_runs / elapsed
+    ms_per_frame = elapsed / num_runs * 1000
+    logger = get_root_logger()
+    logger.info(
+        f'[FPS_calc] {num_runs} runs on {device_str} in {elapsed:.3f}s → '
+        f'{fps:.1f} FPS  ({ms_per_frame:.2f} ms/frame)'
+    )
+    return fps, ms_per_frame, device_str
+
+
 def main():
     set_start_method('spawn', force=True)
     logger = get_root_logger()
@@ -236,6 +326,14 @@ def main():
         device=device)
 
     ir_files = [osp.join(work_dir, ir_save_file)]
+
+    fps_result = None
+    pytorch_fps_result = None
+    if FPS_calc:
+        pytorch_fps_result = _run_pytorch_fps_benchmark(
+            img, model_cfg, deploy_cfg, checkpoint_path)
+        fps_result = _run_fps_benchmark(
+            osp.join(work_dir, ir_save_file), img, model_cfg, deploy_cfg)
 
     # partition model (if configured)
     partition_cfgs = get_partition_config(deploy_cfg)
@@ -329,6 +427,19 @@ def main():
     _overlay_classifier_predictions(
         onnx_path, test_img, model_cfg, deploy_cfg, output_images)
 
+    if pytorch_fps_result is not None or fps_result is not None:
+        logger.info('─' * 55)
+        logger.info('  FPS SUMMARY')
+        if pytorch_fps_result is not None:
+            fps, ms, dev = pytorch_fps_result
+            logger.info(f'  PyTorch : {dev:12s}  {fps:6.1f} FPS  ({ms:.2f} ms/frame)')
+        if fps_result is not None:
+            fps, ms, dev = fps_result
+            logger.info(f'  ONNX    : {dev:12s}  {fps:6.1f} FPS  ({ms:.2f} ms/frame)')
+        if pytorch_fps_result is not None and fps_result is not None:
+            speedup = fps_result[0] / pytorch_fps_result[0]
+            logger.info(f'  Speedup : {speedup:.2f}x  (ONNX vs PyTorch)')
+        logger.info('─' * 55)
     logger.info('All process success.')
 
 

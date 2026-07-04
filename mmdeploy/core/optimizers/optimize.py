@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable, Dict, Iterable, Optional
+from __future__ import annotations
 
-import onnx
-from onnx.helper import get_attribute_value
+from typing import Callable, Dict, Iterable, Optional
 
 from mmdeploy.utils import get_root_logger
 
@@ -16,6 +15,7 @@ def attribute_to_dict(attr: onnx.AttributeProto) -> Dict:
     Returns:
         dict: A dict contains info from op attribute.
     """
+    from onnx.helper import get_attribute_value
     ret = {}
     for a in attr:
         value = get_attribute_value(a)

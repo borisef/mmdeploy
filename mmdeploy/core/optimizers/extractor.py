@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 import re
 
-import onnx
 from packaging import version
 
 
@@ -54,6 +55,7 @@ def create_extractor(model: onnx.ModelProto) -> onnx.utils.Extractor:
     Returns:
         onnx.utils.Extractor: Extractor for the onnx.
     """
+    import onnx
     assert version.parse(onnx.__version__) >= version.parse('1.8.0')
     # patch extractor
     onnx.utils.Extractor._dfs_search_reachable_nodes = \

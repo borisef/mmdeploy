@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
 
 from typing import Dict, Iterable, Optional, Union
-
-import onnx
 
 from .core import PIPELINE_MANAGER
 

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
 import ctypes
 import os.path as osp
 from typing import Dict, Optional, Sequence
@@ -67,8 +68,16 @@ class ORTWrapper(BaseWrapper):
         self.sess = sess
         self._input_metas = {_.name: _ for _ in sess.get_inputs()}
         self.io_binding = sess.io_binding()
-        self.device_id = device_id
-        self.device_type = 'cpu' if device == 'cpu' else 'cuda'
+        actual_providers = sess.get_providers()
+        if device != 'cpu' and 'CUDAExecutionProvider' not in actual_providers:
+            logger.warning(
+                f'CUDAExecutionProvider not in active providers '
+                f'{actual_providers}; falling back to CPU for io_binding.')
+            self.device_type = 'cpu'
+            self.device_id = 0
+        else:
+            self.device_type = 'cpu' if device == 'cpu' else 'cuda'
+            self.device_id = device_id
         super().__init__(output_names)
 
     def forward(self, inputs: Dict[str,

@@ -95,17 +95,47 @@ def torch2onnx(img: Any,
         will merge duplicate initilizers without reference count."""
         optimize = False
     with no_mp():
-        export(
-            torch_model,
-            model_inputs,
-            input_metas=input_metas,
-            output_path_prefix=output_prefix,
-            backend=backend,
-            input_names=input_names,
-            output_names=output_names,
-            context_info=context_info,
-            opset_version=opset_version,
-            dynamic_axes=dynamic_axes,
-            verbose=verbose,
-            keep_initializers_as_inputs=keep_initializers_as_inputs,
-            optimize=optimize)
+        try:
+            export(
+                torch_model,
+                model_inputs,
+                input_metas=input_metas,
+                output_path_prefix=output_prefix,
+                backend=backend,
+                input_names=input_names,
+                output_names=output_names,
+                context_info=context_info,
+                opset_version=opset_version,
+                dynamic_axes=dynamic_axes,
+                verbose=verbose,
+                keep_initializers_as_inputs=keep_initializers_as_inputs,
+                optimize=optimize)
+        except RuntimeError as _e:
+            if ('number of output names provided' not in str(_e)
+                    or 'exceeded number of outputs' not in str(_e)):
+                raise
+            # Older PyTorch (e.g. 1.10) raises this when output_names has
+            # more entries than the model actually produces. Truncate to the
+            # actual count and retry. output_names is a plain list here so
+            # no ConfigDict issues.
+            import re as _re
+            _m = _re.search(r'number of outputs \((\d+)\)', str(_e))
+            _n = int(_m.group(1)) if _m else 1
+            import logging as _logging
+            _logging.getLogger('mmdeploy').warning(
+                f'output_names truncated from {output_names} to '
+                f'{output_names[:_n]} to match {_n} actual model output(s).')
+            export(
+                torch_model,
+                model_inputs,
+                input_metas=input_metas,
+                output_path_prefix=output_prefix,
+                backend=backend,
+                input_names=input_names,
+                output_names=output_names[:_n],
+                context_info=context_info,
+                opset_version=opset_version,
+                dynamic_axes=dynamic_axes,
+                verbose=verbose,
+                keep_initializers_as_inputs=keep_initializers_as_inputs,
+                optimize=optimize)

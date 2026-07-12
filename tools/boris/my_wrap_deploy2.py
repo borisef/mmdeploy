@@ -4,9 +4,7 @@ import logging
 import os
 import os.path as osp
 import re
-import site
 import time
-from glob import glob
 from functools import partial
 
 import mmengine
@@ -28,9 +26,8 @@ from mmdeploy.utils import (IR, Backend, get_backend, get_calib_filename,
 
 NEW_EXPEREMENTAL_PARAMS = True
 USE_FP16 = False #30.6 even worse
-ORT_OPTIMIZE_ALL = True # 31.4 FPS --> 31.6 FPS same
+ORT_OPTIMIZE_ALL = False # 31.4 FPS --> 31.6 FPS same
 FPS_calc = True
-REQUIRE_ONNX_GPU_FOR_FPS = True
 
 work_dir = '/home/borisef/temp/out_mmdeploy_try'
 img = '/home/borisef/projects/mm/mmdeploy/demo/resources/human-pose.jpg'
@@ -45,7 +42,7 @@ if(NEW_EXPEREMENTAL_PARAMS):
     )
 
     model_cfg_path = (
-       # '/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try1_for_onnx.py'
+        # '/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try4/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try1_for_onnx.py'
         '/home/borisef/projects/mm/mmpose/tools/atraf/borisef/work_dirs/hrnet_UDP_w32_try_changes/td-hm_hrnet-w32_udp-8xb64-210e_coco-384x288_try_changes.py'
     )
     # model_cfg_path = (
@@ -243,7 +240,7 @@ def _overlay_classifier_predictions(onnx_path, img_path, model_cfg,
     from mmdeploy.apis.utils import build_task_processor
     from mmdeploy.utils import get_input_shape
 
-    session = _create_ort_session(onnx_path, require_cuda=False)
+    session = onnxruntime.InferenceSession(onnx_path)
     task_processor = build_task_processor(model_cfg, deploy_cfg, 'cpu')
     input_shape = get_input_shape(deploy_cfg)
     _, input_tensor = task_processor.create_input(img_path, input_shape)
@@ -317,97 +314,25 @@ def _run_pytorch_fps_benchmark(img_path, model_cfg, deploy_cfg, checkpoint,
     return fps, ms_per_frame, device_str
 
 
-def _preload_ort_cuda_deps():
-    """Preload CUDA/cuDNN libs shipped with torch for ORT CUDA EP."""
-    import ctypes
-
-    search_dirs = []
-    torch_lib_dir = osp.join(osp.dirname(torch.__file__), 'lib')
-    search_dirs.append(torch_lib_dir)
-
-    for base in site.getsitepackages():
-        search_dirs.extend(
-            sorted(glob(osp.join(base, 'nvidia', '*', 'lib'))))
-
-    search_dirs.extend([
-        '/usr/local/cuda/lib64',
-        '/usr/local/cuda/targets/x86_64-linux/lib',
-        '/usr/lib/x86_64-linux-gnu',
-    ])
-
-    dedup_dirs = []
-    for search_dir in search_dirs:
-        if osp.isdir(search_dir) and search_dir not in dedup_dirs:
-            dedup_dirs.append(search_dir)
-
-    lib_names = [
-        'libcudnn.so.8',
-        'libcudnn.so.9',
-        'libcudnn_adv.so.9',
-        'libcudnn_ops.so.9',
-        'libcudnn_cnn.so.9',
-        'libcudnn_graph.so.9',
-        'libcudnn_engines_runtime_compiled.so.9',
-        'libcudnn_engines_precompiled.so.9',
-        'libcudnn_heuristic.so.9',
-        'libcublas.so.12',
-        'libcublasLt.so.12',
-        'libcublas.so.11',
-        'libcublasLt.so.11',
-        'libcufft.so.11',
-        'libcurand.so.10',
-        'libnvrtc.so.12',
-        'libnvrtc-builtins.so.12',
-    ]
-    for search_dir in dedup_dirs:
-        for lib_name in lib_names:
-            lib_path = osp.join(search_dir, lib_name)
-            if osp.exists(lib_path):
-                ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
-
-
-def _create_ort_session(onnx_path, require_cuda=False):
-    import onnxruntime
-
-    logger = get_root_logger()
-    _preload_ort_cuda_deps()
-
-    preferred_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-
-    session = onnxruntime.InferenceSession(
-        onnx_path, providers=preferred_providers)
-    active_providers = session.get_providers()
-    logger.info(
-        f'ONNX Runtime {onnxruntime.__version__} active providers: '
-        f'{active_providers}')
-
-    if require_cuda and 'CUDAExecutionProvider' not in active_providers:
-        torch_lib_dir = osp.join(osp.dirname(torch.__file__), 'lib')
-        cublas_libs = [osp.basename(p) for p in glob(
-            osp.join(torch_lib_dir, 'libcublas*.so*'))]
-        raise RuntimeError(
-            'ONNX Runtime fell back to CPU during FPS benchmarking. '
-            f'onnxruntime={onnxruntime.__version__}, '
-            f'available_providers={onnxruntime.get_available_providers()}, '
-            f'active_providers={active_providers}, '
-            f'torch_cuda={torch.version.cuda}, '
-            f'torch_cublas_libs={cublas_libs}. '
-            'This usually means the installed onnxruntime-gpu build expects '
-            'different CUDA libraries than the ones available on this machine.')
-
-    return session
-
-
 def _run_fps_benchmark(onnx_path, img_path, model_cfg, deploy_cfg,
                        num_runs=100):
     """Run ONNX inference num_runs times and report FPS. Returns (fps, ms_per_frame, device_str)."""
+    import ctypes
     import numpy as np
+    import onnxruntime
 
     from mmdeploy.apis.utils import build_task_processor
     from mmdeploy.utils import get_input_shape
 
-    session = _create_ort_session(
-        onnx_path, require_cuda=REQUIRE_ONNX_GPU_FOR_FPS)
+    # cuDNN lives inside the torch package dir; pre-load it with RTLD_GLOBAL so
+    # that ORT's CUDA provider can find it (it's not on the system LD_LIBRARY_PATH).
+    _cudnn = osp.join(osp.dirname(torch.__file__), 'lib', 'libcudnn.so.8')
+    if osp.exists(_cudnn):
+        ctypes.CDLL(_cudnn, mode=ctypes.RTLD_GLOBAL)
+
+    session = onnxruntime.InferenceSession(
+        onnx_path,
+        providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     providers = session.get_providers()
     device_str = 'GPU (CUDA)' if 'CUDAExecutionProvider' in providers else 'CPU'
 
@@ -447,7 +372,7 @@ def main():
     pipeline_funcs = [
         torch2onnx, extract_model, create_calib_input_data
     ]
-    PIPELINE_MANAGER.enable_multiprocess(True, pipeline_funcs)
+    PIPELINE_MANAGER.enable_multiprocess(False, pipeline_funcs)
     PIPELINE_MANAGER.set_log_level(log_level, pipeline_funcs)
 
     deploy_cfg, model_cfg = load_config(deploy_cfg_path, model_cfg_path)
